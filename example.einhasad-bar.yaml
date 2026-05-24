@@ -1,0 +1,49 @@
+# Example einhasad-bar project config. Copy to your project, edit, then:
+#   einhasad-bar register /path/to/einhasad-bar.yaml
+#
+# One file = one menu-bar icon. The schema ignores unknown fields, so it can
+# grow without breaking older files.
+project:
+  name: "My Stack"   # menu header (defaults to id)
+  id: "demo"         # tray label + state/log dir name (required, lowercase)
+
+services:
+  # process — einhasad-bar spawns and supervises it (Start/Stop, pidfile, live
+  # CPU/RSS). A `command` with no `mode` is inferred as process.
+  - id: api
+    label: "API"
+    mode: process
+    command: make
+    args: ["run"]
+    working_dir: "/path/to/project/server"
+    env_file: ".env"          # optional plain .env (relative to working_dir)
+    env: { LOG_LEVEL: "debug" } # optional static overrides (win over env_file)
+    url: "http://localhost:8080/"   # adds an "Open" button
+    check: { type: tcp, port: 8080 } # readiness probe; omit → "alive = up"
+
+  # watch — an externally-managed daemon. Health comes only from `check`.
+  # Adding start/stop gives it Start/Stop buttons without einhasad-bar owning
+  # the process: Start runs detached (the daemon outlives the app), Stop runs
+  # to completion.
+  - id: database
+    label: "Database"
+    mode: watch
+    check: { type: tcp, port: 5432 }
+    start: { command: /opt/homebrew/bin/postgres, args: ["-D", "/path/to/pgdata"] }
+    stop:  { command: /opt/homebrew/bin/pg_ctl, args: ["-D", "/path/to/pgdata", "stop"] }
+
+  # group — services that share one delegate command. "Start server" fires it
+  # once, not once per member (e.g. a docker-compose / LAMP up script).
+  - id: cache
+    label: "Cache"
+    mode: watch
+    group: stack
+    required: false                   # optional: never flips the icon colour
+    check: { type: pidfile, pidfile: "/path/to/var/run/redis.pid" }
+    start: { command: /path/to/dev/server, args: ["up"] }
+    stop:  { command: /path/to/dev/server, args: ["down"] }
+
+# check types:
+#   { type: tcp, port: 5432 }
+#   { type: http, url: "http://localhost:9000/health" }   # passes on 2xx/3xx
+#   { type: pidfile, pidfile: "/path/to/x.pid" }

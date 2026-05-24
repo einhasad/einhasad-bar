@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>einhasad-bar</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 13px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    background: #1c1c1e; color: #e5e5e7; user-select: none; -webkit-user-select: none;
+    overflow: hidden;
+  }
+  header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 10px 12px 8px; border-bottom: 1px solid #2c2c2e;
+  }
+  header .name { font-weight: 600; font-size: 14px; }
+  header .summary { font-size: 11px; color: #8e8e93; }
+  ul { list-style: none; margin: 0; padding: 4px 0; max-height: 320px; overflow-y: auto; }
+  li { padding: 7px 12px; border-bottom: 1px solid #262628; }
+  li:last-child { border-bottom: none; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; background: #9ca3af; }
+  .dot.up { background: #22c55e; }
+  .dot.starting { background: #3b82f6; animation: pulse 1s ease-in-out infinite; }
+  .dot.down { background: #6b7280; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  .label { font-weight: 500; flex: 1 1 auto; }
+  .opt { color: #8e8e93; font-weight: 400; font-size: 11px; }
+  .info { font-size: 11px; color: #8e8e93; margin: 2px 0 0 17px; font-variant-numeric: tabular-nums; }
+  .actions { display: flex; gap: 6px; margin: 6px 0 0 17px; }
+  button {
+    font: inherit; font-size: 11px; color: #e5e5e7; background: #2c2c2e;
+    border: 1px solid #3a3a3c; border-radius: 5px; padding: 2px 9px; cursor: pointer;
+  }
+  button:hover { background: #3a3a3c; }
+  button.primary { background: #0a84ff; border-color: #0a84ff; color: #fff; }
+  button.danger { background: #3a2a2c; border-color: #5a3a3c; }
+  footer {
+    display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid #2c2c2e;
+    background: #161618;
+  }
+  footer button { flex: 1 1 auto; }
+  .muted { color: #8e8e93; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="name" id="proj-name">…</span>
+    <span class="summary" id="proj-summary"></span>
+  </header>
+  <ul id="services"></ul>
+  <footer>
+    <button id="btn-start-all">Start server</button>
+    <button id="btn-stop-all">Stop server</button>
+    <button id="btn-quit" class="danger">Quit</button>
+  </footer>
+
+<script type="module">
+  import * as wails from "/wails/runtime.js";
+
+  const project = new URLSearchParams(location.search).get("p") || "";
+
+  function action(op, service = "") {
+    wails.Events.Emit("eb:action", JSON.stringify({ op, project, service }));
+  }
+
+  function render(snap) {
+    const pv = (snap.projects || []).find(p => p.id === project);
+    if (!pv) return;
+
+    document.getElementById("proj-name").textContent = pv.name;
+    let summary = `${pv.reqUp}/${pv.reqTotal} running`;
+    if (pv.reqStarting > 0) summary += ` · ${pv.reqStarting} starting`;
+    document.getElementById("proj-summary").textContent = summary;
+
+    const ul = document.getElementById("services");
+    ul.innerHTML = "";
+    for (const s of pv.services) {
+      const li = document.createElement("li");
+
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML =
+        `<span class="dot ${s.state}"></span>` +
+        `<span class="label">${s.label}${s.required ? "" : ' <span class="opt">(opt)</span>'}</span>`;
+      li.appendChild(row);
+
+      const info = document.createElement("div");
+      info.className = "info";
+      info.textContent = s.info;
+      li.appendChild(info);
+
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      if (s.canToggle) {
+        const b = document.createElement("button");
+        b.textContent = s.running ? "Stop" : "Start";
+        b.className = s.running ? "danger" : "primary";
+        b.onclick = () => action(s.running ? "stop" : "start", s.id);
+        actions.appendChild(b);
+      }
+      if (s.url) {
+        const b = document.createElement("button");
+        b.textContent = "Open";
+        b.onclick = () => action("openurl", s.id);
+        actions.appendChild(b);
+      }
+      const tail = document.createElement("button");
+      tail.textContent = "Log";
+      tail.onclick = () => action("taillog", s.id);
+      actions.appendChild(tail);
+      li.appendChild(actions);
+
+      ul.appendChild(li);
+    }
+  }
+
+  wails.Events.On("eb:state", (ev) => {
+    try { render(JSON.parse(ev.data)); } catch (e) { console.error("bad state", e, ev); }
+  });
+
+  document.getElementById("btn-start-all").onclick = () => action("startall");
+  document.getElementById("btn-stop-all").onclick = () => action("stopall");
+  document.getElementById("btn-quit").onclick = () => action("quit");
+
+  // Ask for an immediate snapshot in case the window opened between ticks.
+  action("refresh");
+</script>
+</body>
+</html>

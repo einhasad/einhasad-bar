@@ -1,0 +1,8 @@
+# Build output
+/einhasad-bar
+/bin/
+/dist/
+*.app
+
+# macOS
+.DS_Store

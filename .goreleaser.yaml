@@ -1,0 +1,62 @@
+# GoReleaser config for einhasad-bar.
+# Local check:   goreleaser build --single-target --snapshot --clean
+# Release (CI):  triggered by pushing a v* tag (see .github/workflows/release.yml)
+#
+# MVP ships darwin/arm64 only — the app is a CGO Wails binary, and a single
+# native arm64 build avoids cross-compiling CGO. amd64 is a follow-up.
+version: 2
+
+project_name: einhasad-bar
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: einhasad-bar
+    main: .
+    binary: einhasad-bar
+    env:
+      - CGO_ENABLED=1
+    goos: [darwin]
+    goarch: [arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+brews:
+  - name: einhasad-bar
+    repository:
+      owner: einhasad
+      name: homebrew-tap
+      # GITHUB_TOKEN can't push to a different repo — use a PAT with
+      # Contents:write on einhasad/homebrew-tap, stored as HOMEBREW_TAP_TOKEN.
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/einhasad/einhasad-bar"
+    description: "macOS menu-bar manager for local dev stacks, configured via YAML"
+    license: "MIT"
+    install: |
+      bin.install "einhasad-bar"
+    caveats: |
+      einhasad-bar is a menu-bar app. Register a project config, then launch it:
+        einhasad-bar register /path/to/einhasad-bar.yaml
+        einhasad-bar &
+      To start it at login, add it under
+        System Settings → General → Login Items.
+
+release:
+  github:
+    owner: einhasad
+    name: einhasad-bar
+
+changelog:
+  use: github
