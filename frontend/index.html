@@ -55,7 +55,6 @@
   <footer>
     <button id="btn-start-all">Start server</button>
     <button id="btn-stop-all">Stop server</button>
-    <button id="btn-quit" class="danger">Quit</button>
   </footer>
 
 <script type="module">
@@ -124,7 +123,8 @@
 
   document.getElementById("btn-start-all").onclick = () => action("startall");
   document.getElementById("btn-stop-all").onclick = () => action("stopall");
-  document.getElementById("btn-quit").onclick = () => action("quit");
+  // App-wide Quit lives in the tray's right-click menu ("Quit einhasad-bar"),
+  // not here — a project popover shouldn't quit the whole app (all projects).
 
   // Ask for an immediate snapshot in case the window opened between ticks.
   action("refresh");
