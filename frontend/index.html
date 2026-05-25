@@ -52,10 +52,7 @@
     <span class="summary" id="proj-summary"></span>
   </header>
   <ul id="services"></ul>
-  <footer>
-    <button id="btn-start-all">Start server</button>
-    <button id="btn-stop-all">Stop server</button>
-  </footer>
+  <footer id="footer"></footer>
 
 <script type="module">
   import * as wails from "/wails/runtime.js";
@@ -71,6 +68,16 @@
     if (!pv) return;
 
     document.getElementById("proj-name").textContent = pv.name;
+
+    const footer = document.getElementById("footer");
+    footer.innerHTML = "";
+    for (const a of (pv.actions || [])) {
+      const b = document.createElement("button");
+      b.textContent = a.label;
+      b.onclick = () => action("action", a.label);
+      footer.appendChild(b);
+    }
+
     let summary = `${pv.reqUp}/${pv.reqTotal} running`;
     if (pv.reqStarting > 0) summary += ` · ${pv.reqStarting} starting`;
     document.getElementById("proj-summary").textContent = summary;
@@ -121,10 +128,7 @@
     try { render(JSON.parse(ev.data)); } catch (e) { console.error("bad state", e, ev); }
   });
 
-  document.getElementById("btn-start-all").onclick = () => action("startall");
-  document.getElementById("btn-stop-all").onclick = () => action("stopall");
-  // App-wide Quit lives in the tray's right-click menu ("Quit einhasad-bar"),
-  // not here — a project popover shouldn't quit the whole app (all projects).
+  // Actions are rendered dynamically from pv.actions in render().
 
   // Ask for an immediate snapshot in case the window opened between ticks.
   action("refresh");

@@ -201,6 +201,9 @@ func (c *Controller) dispatch(projectID, serviceID, op string) {
 	case "refresh":
 		c.Refresh()
 		return
+	case "action":
+		c.dispatchAction(projectID, serviceID)
+		return
 	}
 
 	// Serialise mutating actions per project so a fast Stop→Start (or two
@@ -247,6 +250,23 @@ func (c *Controller) startService(projectID string, svc config.Service) {
 func (c *Controller) stopService(projectID string, svc config.Service) {
 	if svc.Mode == config.ModeProcess {
 		_ = c.sup.Stop(projectID, svc)
+	}
+}
+
+func (c *Controller) dispatchAction(projectID, label string) {
+	c.mu.RLock()
+	projects := append([]config.Project(nil), c.projects...)
+	c.mu.RUnlock()
+	for _, proj := range projects {
+		if proj.ID != projectID {
+			continue
+		}
+		for _, a := range proj.Actions {
+			if a.Label == label {
+				c.runAction(a)
+				return
+			}
+		}
 	}
 }
 

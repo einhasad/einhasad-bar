@@ -35,10 +35,16 @@ type ServiceView struct {
 	CanToggle bool   `json:"canToggle"` // process mode → show Start/Stop
 }
 
+// ActionView is one project-level action as sent to the frontend.
+type ActionView struct {
+	Label string `json:"label"`
+}
+
 // ProjectView is one project's state on the wire.
 type ProjectView struct {
 	ID          string        `json:"id"`
 	Name        string        `json:"name"`
+	Actions     []ActionView  `json:"actions"`
 	Services    []ServiceView `json:"services"`
 	ReqUp       int           `json:"reqUp"`
 	ReqTotal    int           `json:"reqTotal"`
@@ -55,6 +61,9 @@ func Build(projects []config.Project, sup *supervisor.Supervisor) Snapshot {
 	snap := Snapshot{}
 	for _, proj := range projects {
 		pv := ProjectView{ID: proj.ID, Name: proj.Name}
+		for _, a := range proj.Actions {
+			pv.Actions = append(pv.Actions, ActionView{Label: a.Label})
+		}
 		for _, svc := range proj.Services {
 			sv := buildService(proj.ID, svc, sup)
 			pv.Services = append(pv.Services, sv)
@@ -112,9 +121,7 @@ func buildService(projID string, svc config.Service, sup *supervisor.Supervisor)
 		return sv
 	}
 
-	// watch service: status is purely its check. It becomes toggleable only when
-	// it declares a Start or Stop command; Running mirrors the check (no pidfile).
-	sv.CanToggle = svc.Start != nil || svc.Stop != nil
+	// watch: status is purely the check result; no lifecycle control.
 	if health.Probe(svc.Check) {
 		sv.State = StateUp
 		sv.Running = true
