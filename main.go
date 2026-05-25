@@ -13,7 +13,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -134,15 +133,18 @@ func runUp(args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	pidPath, err := paths.AppPidFile(proj.ID)
-	if err != nil {
-		return err
-	}
-	if pid, ok := readPID(pidPath); ok && isAlive(pid) {
-		return fmt.Errorf("project %q is already running (pid %d)\nuse: einhasad-bar down --id=%s", proj.ID, pid, proj.ID)
-	}
-
 	if *detach {
+		// Try the lock before forking so the parent can report a clean error.
+		// The child will re-acquire it in launchApp.
+		pidPath, err := paths.AppPidFile(proj.ID)
+		if err != nil {
+			return err
+		}
+		lf, err := acquireLock(pidPath, proj.ID)
+		if err != nil {
+			return err
+		}
+		lf.Close() // release; child will re-acquire
 		return forkExecApp(proj.ID, filePaths)
 	}
 	return launchApp(filePaths)
@@ -175,7 +177,7 @@ func runDown(args []string) error {
 		return err
 	}
 	pid, ok := readPID(pidPath)
-	if !ok || !isAlive(pid) {
+	if !ok || syscall.Kill(pid, 0) != nil {
 		return fmt.Errorf("project %q is not running", projectID)
 	}
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
@@ -185,8 +187,9 @@ func runDown(args []string) error {
 	return nil
 }
 
-// launchApp loads the config, writes a PID lockfile, and runs the Wails GUI.
-// It is called both from runUp (foreground) and from --_app (daemon child).
+// launchApp loads the config, acquires an exclusive flock on the PID file
+// (the OS releases it automatically on process exit), and runs the Wails GUI.
+// Called from runUp (foreground) and --_app (daemon child).
 func launchApp(filePaths []string) error {
 	proj, err := config.LoadFiles(filePaths)
 	if err != nil {
@@ -197,19 +200,15 @@ func launchApp(filePaths []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
-		return fmt.Errorf("write pid file: %w", err)
+	// Acquire exclusive lock. The OS releases it when this process exits for
+	// any reason — no manual cleanup or signal handler needed.
+	lf, err := acquireLock(pidPath, proj.ID)
+	if err != nil {
+		return err
 	}
-	defer os.Remove(pidPath)
-
-	// Remove PID file on SIGTERM/SIGINT so stale checks don't false-positive.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-sigCh
-		os.Remove(pidPath)
-		os.Exit(0)
-	}()
+	lf.Truncate(0)
+	fmt.Fprintf(lf, "%d", os.Getpid()) // write PID for 'down' to read
+	// lf is intentionally not closed — keeping it open holds the flock.
 
 	frontend, err := fs.Sub(frontendFS, "frontend")
 	if err != nil {
@@ -270,6 +269,25 @@ func forkExecApp(projectID string, filePaths []string) error {
 	return nil
 }
 
+// acquireLock opens pidPath and tries a non-blocking exclusive flock.
+// Returns the open file (caller must keep it open to hold the lock) or an
+// error if the lock is already held by another process.
+func acquireLock(pidPath, projectID string) (*os.File, error) {
+	f, err := os.OpenFile(pidPath, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open lock file: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		pid, ok := readPID(pidPath)
+		f.Close()
+		if ok {
+			return nil, fmt.Errorf("project %q is already running (pid %d)\nuse: einhasad-bar down --id=%s", projectID, pid, projectID)
+		}
+		return nil, fmt.Errorf("project %q is already running", projectID)
+	}
+	return f, nil
+}
+
 func readPID(path string) (int, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -280,8 +298,4 @@ func readPID(path string) (int, bool) {
 		return 0, false
 	}
 	return pid, true
-}
-
-func isAlive(pid int) bool {
-	return syscall.Kill(pid, 0) == nil
 }
