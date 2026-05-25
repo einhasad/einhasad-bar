@@ -130,3 +130,161 @@ func TestLoadFile_rejectsEmptyLifecycleCommand(t *testing.T) {
 	// Assert
 	neq(t, "empty start command is rejected", err, nil)
 }
+
+func TestLoadFile_expandsProjectDir(t *testing.T) {
+	// Arrange
+	dir := realDir(t)
+	path := filepath.Join(dir, "aw.einhasad-bar.yaml")
+	writeFile(t, path, "project:\n  id: aw\nservices:\n  - id: s\n    command: echo\n    working_dir: \"$PROJECT_DIR/server\"\n    check: { type: tcp, port: 1 }\n")
+
+	// Act
+	proj, err := config.LoadFile(path)
+
+	// Assert
+	eq(t, "no error", err, nil)
+	eq(t, "PROJECT_DIR expanded in working_dir", proj.Services[0].WorkingDir, dir+"/server")
+}
+
+func TestLoadFile_expandsDeclaredVariables(t *testing.T) {
+	// Arrange
+	dir := realDir(t)
+	path := filepath.Join(dir, "aw.einhasad-bar.yaml")
+	writeFile(t, path, "project:\n  id: aw\nvariables:\n  BIN: /usr/local/bin\n  DATA: $PROJECT_DIR/data\nservices:\n  - id: s\n    mode: watch\n    check: { type: pidfile, pidfile: \"$DATA/s.pid\" }\n    start: { command: \"$BIN/mysqld\" }\n")
+
+	// Act
+	proj, err := config.LoadFile(path)
+
+	// Assert
+	eq(t, "no error", err, nil)
+	eq(t, "declared var expanded in command", proj.Services[0].Start.Command, "/usr/local/bin/mysqld")
+	eq(t, "var referencing PROJECT_DIR expanded in pidfile", proj.Services[0].Check.Pidfile, dir+"/data/s.pid")
+}
+
+func TestLoadFile_mergesLocalSibling(t *testing.T) {
+	// Arrange — base declares a variable, local overrides it.
+	dir := t.TempDir()
+	base := filepath.Join(dir, "ev.einhasad-bar.yaml")
+	local := filepath.Join(dir, "ev.einhasad-bar.local.yaml")
+	writeFile(t, base, "project:\n  id: ev\nvariables:\n  BIN: /default/bin\nservices:\n  - id: s\n    mode: watch\n    check: { type: tcp, port: 1 }\n    start: { command: \"$BIN/server\" }\n")
+	writeFile(t, local, "variables:\n  BIN: /local/bin\n")
+
+	// Act
+	proj, err := config.LoadFile(base)
+
+	// Assert
+	eq(t, "no error", err, nil)
+	eq(t, "local var override wins", proj.Services[0].Start.Command, "/local/bin/server")
+}
+
+func TestLoadFile_localAlwaysWinsOverNonLocal(t *testing.T) {
+	// Arrange — three files; local must win even though "z" sorts after "local".
+	dir := t.TempDir()
+	base := filepath.Join(dir, "p.einhasad-bar.yaml")
+	nonLocal := filepath.Join(dir, "p.einhasad-bar.z.yaml")
+	local := filepath.Join(dir, "p.einhasad-bar.local.yaml")
+	writeFile(t, base, "project:\n  id: p\nvariables:\n  BIN: /base\nservices:\n  - id: s\n    mode: watch\n    check: { type: tcp, port: 1 }\n    start: { command: \"$BIN/s\" }\n")
+	writeFile(t, nonLocal, "variables:\n  BIN: /nonlocal\n")
+	writeFile(t, local, "variables:\n  BIN: /local\n")
+
+	// Act
+	proj, err := config.LoadFile(base)
+
+	// Assert
+	eq(t, "no error", err, nil)
+	eq(t, "local.yaml wins over non-local regardless of sort order", proj.Services[0].Start.Command, "/local/s")
+}
+
+func TestLoadFile_mergesServicesByID(t *testing.T) {
+	// Arrange — local overrides a single service field without touching others.
+	dir := t.TempDir()
+	base := filepath.Join(dir, "p.einhasad-bar.yaml")
+	local := filepath.Join(dir, "p.einhasad-bar.local.yaml")
+	writeFile(t, base, "project:\n  id: p\nservices:\n  - id: api\n    command: make\n    args: [run]\n    working_dir: /base/server\n    check: { type: tcp, port: 4444 }\n")
+	writeFile(t, local, "services:\n  - id: api\n    working_dir: /local/server\n")
+
+	// Act
+	proj, err := config.LoadFile(base)
+
+	// Assert
+	eq(t, "no error", err, nil)
+	eq(t, "local working_dir wins", proj.Services[0].WorkingDir, "/local/server")
+	eq(t, "base command preserved", proj.Services[0].Command, "make")
+}
+
+func TestLoadFile_include(t *testing.T) {
+	// Arrange — root file includes a sibling file that adds a service.
+	root := realDir(t)
+	sub := t.TempDir()
+	subReal, _ := filepath.EvalSymlinks(sub)
+
+	rootFile := filepath.Join(root, "ev.einhasad-bar.yaml")
+	subFile := filepath.Join(subReal, "backend.yaml")
+
+	writeFile(t, rootFile, "project:\n  id: ev\ninclude:\n  - "+subFile+"\nservices:\n  - id: nginx\n    mode: watch\n    check: { type: tcp, port: 80 }\n")
+	writeFile(t, subFile, "services:\n  - id: mysql\n    mode: watch\n    check: { type: tcp, port: 3306 }\n")
+
+	// Act
+	proj, err := config.LoadFile(rootFile)
+
+	// Assert
+	eq(t, "no error", err, nil)
+	eq(t, "service count", len(proj.Services), 2)
+	eq(t, "first service id", proj.Services[0].ID, "nginx")
+	eq(t, "included service id", proj.Services[1].ID, "mysql")
+}
+
+func TestLoadFile_includeProjectDirIsOwnDir(t *testing.T) {
+	// Arrange — the included file uses its own $PROJECT_DIR (not the root's).
+	root := realDir(t)
+	sub := realDir(t)
+
+	rootFile := filepath.Join(root, "ev.einhasad-bar.yaml")
+	subFile := filepath.Join(sub, "backend.yaml")
+
+	writeFile(t, rootFile, "project:\n  id: ev\ninclude:\n  - "+subFile+"\nservices:\n  - id: nginx\n    mode: watch\n    check: { type: tcp, port: 80 }\n")
+	writeFile(t, subFile, "services:\n  - id: mysql\n    mode: watch\n    check: { type: pidfile, pidfile: \"$PROJECT_DIR/run/mysqld.pid\" }\n")
+
+	// Act
+	proj, err := config.LoadFile(rootFile)
+
+	// Assert
+	eq(t, "no error", err, nil)
+	var mysql config.Service
+	for _, s := range proj.Services {
+		if s.ID == "mysql" {
+			mysql = s
+		}
+	}
+	eq(t, "included $PROJECT_DIR = included file's dir", mysql.Check.Pidfile, sub+"/run/mysqld.pid")
+}
+
+func TestLoadFiles_mergesMultipleFiles(t *testing.T) {
+	// Arrange
+	dir := realDir(t)
+	f1 := filepath.Join(dir, "a.yaml")
+	f2 := filepath.Join(dir, "b.yaml")
+	writeFile(t, f1, "project:\n  id: ev\nservices:\n  - id: nginx\n    mode: watch\n    check: { type: tcp, port: 80 }\n")
+	writeFile(t, f2, "project:\n  id: ev\nservices:\n  - id: mysql\n    mode: watch\n    check: { type: tcp, port: 3306 }\n")
+
+	// Act
+	proj, err := config.LoadFiles([]string{f1, f2})
+
+	// Assert
+	eq(t, "no error", err, nil)
+	eq(t, "service count", len(proj.Services), 2)
+}
+
+func TestLoadFiles_rejectsMismatchedIDs(t *testing.T) {
+	// Arrange
+	dir := realDir(t)
+	f1 := filepath.Join(dir, "a.yaml")
+	f2 := filepath.Join(dir, "b.yaml")
+	writeFile(t, f1, "project:\n  id: ev\nservices:\n  - id: nginx\n    mode: watch\n    check: { type: tcp, port: 80 }\n")
+	writeFile(t, f2, "project:\n  id: other\nservices:\n  - id: mysql\n    mode: watch\n    check: { type: tcp, port: 3306 }\n")
+
+	// Act
+	_, err := config.LoadFiles([]string{f1, f2})
+
+	// Assert
+	neq(t, "mismatched IDs are rejected", err, nil)
+}

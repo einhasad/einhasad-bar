@@ -41,8 +41,10 @@ type Controller struct {
 	app      *application.App
 	sup      *supervisor.Supervisor
 	icons    Icons
+	mu       sync.RWMutex
 	projects []config.Project
 	trays    map[string]*application.SystemTray
+	windows  map[string]*application.WebviewWindow
 	lastIcon map[string]string
 	locks    sync.Map // projectID → *sync.Mutex, serialises actions per project
 }
@@ -56,6 +58,7 @@ func New(app *application.App, sup *supervisor.Supervisor, icons Icons, projects
 		icons:    icons,
 		projects: projects,
 		trays:    map[string]*application.SystemTray{},
+		windows:  map[string]*application.WebviewWindow{},
 		lastIcon: map[string]string{},
 	}
 	for _, proj := range projects {
@@ -103,34 +106,50 @@ func (c *Controller) addProject(proj config.Project) {
 	menu.Add("Stop server").OnClick(func(*application.Context) { go c.dispatch(proj.ID, "", "stopall") })
 	menu.Add("Refresh").OnClick(func(*application.Context) { c.Refresh() })
 	menu.AddSeparator()
-	menu.Add("Quit einhasad-bar").OnClick(func(*application.Context) { c.app.Quit() })
+	menu.Add("Quit").OnClick(func(*application.Context) { go c.quitProject(proj.ID) })
 	tray.SetMenu(menu)
 
 	c.trays[proj.ID] = tray
+	c.windows[proj.ID] = window
 }
 
 // Refresh builds the current snapshot, pushes it to every popover, and repaints
 // the tray icons/labels. Safe to call from the ticker and from action handlers.
 func (c *Controller) Refresh() {
-	snap := state.Build(c.projects, c.sup)
+	c.mu.RLock()
+	projects := append([]config.Project(nil), c.projects...)
+	c.mu.RUnlock()
+
+	snap := state.Build(projects, c.sup)
 
 	if data, err := json.Marshal(snap); err == nil {
 		c.app.Event.Emit("eb:state", string(data))
 	}
 
 	for _, pv := range snap.Projects {
+		c.mu.RLock()
 		tray := c.trays[pv.ID]
+		lastName := c.lastIcon[pv.ID]
+		c.mu.RUnlock()
+
 		if tray == nil {
 			continue
 		}
 		name, icon := c.iconFor(pv)
-		if c.lastIcon[pv.ID] != name {
-			tray.SetIcon(icon)
+		if lastName != name {
+			c.mu.Lock()
 			c.lastIcon[pv.ID] = name
+			c.mu.Unlock()
+			tray.SetIcon(icon)
 		}
-		label := fmt.Sprintf("%s %d/%d", strings.ToUpper(pv.ID), pv.ReqUp, pv.ReqTotal)
-		if pv.ReqStarting > 0 {
-			label += "…"
+		var label string
+		if pv.ReqTotal > 0 && pv.ReqUp < pv.ReqTotal {
+			label = fmt.Sprintf("%s %d/%d", strings.ToUpper(pv.ID), pv.ReqUp, pv.ReqTotal)
+			if pv.ReqStarting > 0 {
+				label += "…"
+			}
+		} else {
+			label = strings.ToUpper(pv.ID)
 		}
 		tray.SetLabel(label)
 	}
@@ -243,11 +262,48 @@ func (c *Controller) stopService(projectID string, svc config.Service) {
 	_ = c.sup.Stop(projectID, svc)
 }
 
+// quitProject stops all process-mode services for one project, removes its tray
+// icon and popover, and quits the app only if no projects remain.
+func (c *Controller) quitProject(projectID string) {
+	unlock := c.lockProject(projectID)
+	c.forEachServer(projectID, false, false)
+	unlock()
+
+	c.mu.Lock()
+	tray := c.trays[projectID]
+	window := c.windows[projectID]
+	delete(c.trays, projectID)
+	delete(c.windows, projectID)
+	delete(c.lastIcon, projectID)
+	for i, p := range c.projects {
+		if p.ID == projectID {
+			c.projects = append(c.projects[:i], c.projects[i+1:]...)
+			break
+		}
+	}
+	remaining := len(c.trays)
+	c.mu.Unlock()
+
+	if window != nil {
+		window.Close()
+	}
+	if tray != nil {
+		tray.Destroy()
+	}
+	if remaining == 0 {
+		c.app.Quit()
+	}
+}
+
 // forEachServer starts or stops a project's controllable services, deduplicating
 // by Group so a shared delegate command (EV's `dev/local/server up`) runs once.
 // requiredOnly limits to required services (used by "Start server").
 func (c *Controller) forEachServer(projectID string, requiredOnly, start bool) {
-	for _, proj := range c.projects {
+	c.mu.RLock()
+	projects := append([]config.Project(nil), c.projects...)
+	c.mu.RUnlock()
+
+	for _, proj := range projects {
 		if proj.ID != projectID {
 			continue
 		}
@@ -284,6 +340,8 @@ func isToggleable(svc config.Service) bool {
 }
 
 func (c *Controller) service(projectID, serviceID string) (config.Service, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	for _, proj := range c.projects {
 		if proj.ID != projectID {
 			continue

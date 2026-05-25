@@ -63,3 +63,13 @@ func LogFile(projectID, serviceID string) (string, error) {
 	}
 	return filepath.Join(dir, serviceID+".log"), nil
 }
+
+// AppPidFile returns the path where the einhasad-bar process managing a
+// project stores its PID. Used by "up" (write) and "down" (signal).
+func AppPidFile(projectID string) (string, error) {
+	dir, err := StateDir(projectID)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "einhasad-bar.pid"), nil
+}
