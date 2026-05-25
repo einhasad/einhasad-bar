@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/einhasad/einhasad-bar/internal/config"
+	"github.com/einhasad/einhasad-bar/internal/health"
 	"github.com/einhasad/einhasad-bar/internal/paths"
 	"github.com/einhasad/einhasad-bar/internal/supervisor"
 	"github.com/einhasad/einhasad-bar/internal/ui"
@@ -66,7 +67,7 @@ func main() {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "usage: einhasad-bar <up [-d] [files...]|down [--id=ID]|version>\n")
+	fmt.Fprintf(os.Stderr, "usage: einhasad-bar <up [-d] [files...]|down [--id=ID]|restart [-d] [files...]|status [files...]|version>\n")
 	os.Exit(1)
 }
 
@@ -99,11 +100,15 @@ func runCommand(cmd string, args []string) error {
 		return runUp(args)
 	case "down":
 		return runDown(args)
+	case "restart":
+		return runRestart(args)
+	case "status":
+		return runStatus(args)
 	case "version":
 		fmt.Printf("einhasad-bar %s\n", version)
 		return nil
 	default:
-		return fmt.Errorf("unknown command %q (want: up | down | version)", cmd)
+		return fmt.Errorf("unknown command %q (want: up | down | restart | status | version)", cmd)
 	}
 }
 
@@ -185,6 +190,165 @@ func runDown(args []string) error {
 	}
 	fmt.Printf("stopped project %q (pid %d)\n", projectID, pid)
 	return nil
+}
+
+// runRestart stops the running project (waiting up to 5s) then starts it again.
+func runRestart(args []string) error {
+	fset := flag.NewFlagSet("restart", flag.ContinueOnError)
+	detach := fset.Bool("d", false, "restart in the background")
+	if err := fset.Parse(args); err != nil {
+		return err
+	}
+
+	filePaths := fset.Args()
+	if len(filePaths) == 0 {
+		filePaths = []string{"einhasad-bar.yaml"}
+	}
+	for i, p := range filePaths {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return err
+		}
+		filePaths[i] = abs
+	}
+
+	proj, err := config.LoadFiles(filePaths)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	pidPath, err := paths.AppPidFile(proj.ID)
+	if err != nil {
+		return err
+	}
+	if pid, ok := readPID(pidPath); ok && syscall.Kill(pid, 0) == nil {
+		fmt.Printf("stopping %q (pid %d)...\n", proj.ID, pid)
+		syscall.Kill(pid, syscall.SIGTERM)
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if syscall.Kill(pid, 0) != nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if syscall.Kill(pid, 0) == nil {
+			return fmt.Errorf("project %q did not stop within 5s", proj.ID)
+		}
+	}
+
+	if *detach {
+		return forkExecApp(proj.ID, filePaths)
+	}
+	return launchApp(filePaths)
+}
+
+// runStatus prints the health of every service in the project.
+func runStatus(args []string) error {
+	fset := flag.NewFlagSet("status", flag.ContinueOnError)
+	if err := fset.Parse(args); err != nil {
+		return err
+	}
+
+	filePaths := fset.Args()
+	if len(filePaths) == 0 {
+		filePaths = []string{"einhasad-bar.yaml"}
+	}
+	for i, p := range filePaths {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return err
+		}
+		filePaths[i] = abs
+	}
+
+	proj, err := config.LoadFiles(filePaths)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	pidPath, _ := paths.AppPidFile(proj.ID)
+	appState := "not running"
+	if pid, ok := readPID(pidPath); ok && syscall.Kill(pid, 0) == nil {
+		appState = fmt.Sprintf("running (pid %d)", pid)
+	}
+
+	var reqUp, reqTotal int
+	type row struct {
+		label    string
+		check    string
+		optional bool
+		up       bool
+		reason   string
+	}
+	rows := make([]row, len(proj.Services))
+	for i, svc := range proj.Services {
+		up, reason := serviceHealth(proj.ID, svc)
+		rows[i] = row{
+			label:    svc.Label,
+			check:    healthDesc(svc),
+			optional: !svc.IsRequired(),
+			up:       up,
+			reason:   reason,
+		}
+		if svc.IsRequired() {
+			reqTotal++
+			if up {
+				reqUp++
+			}
+		}
+	}
+
+	fmt.Printf("%s (%s)  %d/%d required up  [%s]\n\n", proj.Name, proj.ID, reqUp, reqTotal, appState)
+	for _, r := range rows {
+		marker := "up  "
+		if !r.up {
+			marker = "down"
+		}
+		opt := ""
+		if r.optional {
+			opt = " (optional)"
+		}
+		if r.reason != "" {
+			fmt.Printf("  [%s]  %-20s  %-28s%s  — %s\n", marker, r.label, r.check, opt, r.reason)
+		} else {
+			fmt.Printf("  [%s]  %-20s  %-28s%s\n", marker, r.label, r.check, opt)
+		}
+	}
+	return nil
+}
+
+// serviceHealth probes a service and returns (up, reason).
+// For process-mode services with no check it falls back to the supervisor pidfile.
+func serviceHealth(projectID string, svc config.Service) (bool, string) {
+	if svc.Check != nil {
+		return health.ProbeReason(svc.Check)
+	}
+	if svc.Mode == config.ModeProcess {
+		pidPath, err := paths.PidFile(projectID, svc.ID)
+		if err != nil {
+			return false, err.Error()
+		}
+		data, err := os.ReadFile(pidPath)
+		if err != nil {
+			return false, "not started"
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil || pid <= 0 || syscall.Kill(pid, 0) != nil {
+			return false, "process not running"
+		}
+		return true, ""
+	}
+	return false, "no check"
+}
+
+func healthDesc(svc config.Service) string {
+	if svc.Check != nil {
+		return health.String(svc.Check)
+	}
+	if svc.Mode == config.ModeProcess {
+		return "process"
+	}
+	return ""
 }
 
 // launchApp loads the config, acquires an exclusive flock on the PID file

@@ -24,54 +24,70 @@ const probeTimeout = 1 * time.Second
 
 // Probe runs a single check and reports whether it passed.
 func Probe(c *config.Check) bool {
+	ok, _ := ProbeReason(c)
+	return ok
+}
+
+// ProbeReason runs a single check and returns whether it passed plus a
+// human-readable reason string (empty on success).
+func ProbeReason(c *config.Check) (bool, string) {
 	if c == nil {
-		return false
+		return false, "no check configured"
 	}
 	switch c.Type {
 	case config.CheckTCP:
-		return tcpOK(c.Port)
+		return probeTCP(c.Port)
 	case config.CheckHTTP:
-		return httpOK(c.URL)
+		return probeHTTP(c.URL)
 	case config.CheckPidfile:
-		return pidfileOK(c.Pidfile)
+		return probePidfile(c.Pidfile)
 	default:
-		return false
+		return false, fmt.Sprintf("unknown check type %q", c.Type)
 	}
 }
 
-func tcpOK(port int) bool {
+func probeTCP(port int) (bool, string) {
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", addr, probeTimeout)
 	if err != nil {
-		return false
+		if strings.Contains(err.Error(), "refused") {
+			return false, fmt.Sprintf("port %d: connection refused", port)
+		}
+		return false, fmt.Sprintf("port %d: %v", port, err)
 	}
 	_ = conn.Close()
-	return true
+	return true, ""
 }
 
-func httpOK(url string) bool {
+func probeHTTP(url string) (bool, string) {
 	client := &http.Client{Timeout: probeTimeout}
 	resp, err := client.Get(url)
 	if err != nil {
-		return false
+		return false, fmt.Sprintf("HTTP %s: %v", url, err)
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode >= 200 && resp.StatusCode < 400
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return false, fmt.Sprintf("HTTP %s: status %d", url, resp.StatusCode)
+	}
+	return true, ""
 }
 
-func pidfileOK(path string) bool {
+func probePidfile(path string) (bool, string) {
 	if path == "" {
-		return false
+		return false, "no pidfile path configured"
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return false, fmt.Sprintf("no pidfile at %s", path)
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil || pid <= 0 {
-		return false
+		return false, fmt.Sprintf("invalid pid in %s", path)
 	}
-	return syscall.Kill(pid, 0) == nil
+	if syscall.Kill(pid, 0) != nil {
+		return false, fmt.Sprintf("process %d is not running", pid)
+	}
+	return true, ""
 }
 
 // String renders a check for the details/log output.
