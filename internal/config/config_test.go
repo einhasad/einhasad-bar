@@ -18,8 +18,6 @@ services:
     label: "MySQL"
     mode: watch
     check: { type: tcp, port: 3306 }
-    start: { command: mysqld, args: ["--defaults-file", "/tmp/my.cnf"] }
-    stop:  { command: mysqladmin, args: ["shutdown"] }
   - id: garage
     mode: watch
     check: { type: http, url: "http://localhost:3903/health" }
@@ -71,25 +69,35 @@ func TestLoadFile_appliesDefaultsAndModes(t *testing.T) {
 	eq(t, "grpc working dir parsed", grpc.WorkingDir, "/srv/almaword/server")
 }
 
-func TestLoadFile_parsesWatchLifecycleAndGroup(t *testing.T) {
-	// Arrange — a watch service carrying start/stop + a group.
+func TestLoadFile_watchRejectsStartStop(t *testing.T) {
+	// Watch mode is monitor-only; start/stop commands are forbidden.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.einhasad-bar.yaml")
+
+	writeFile(t, path, "project:\n  id: p\nservices:\n"+
+		"  - id: s\n    mode: watch\n    check: { type: tcp, port: 1 }\n"+
+		"    start: { command: server }\n")
+	_, err := config.LoadFile(path)
+	neq(t, "watch+start is rejected", err, nil)
+
+	writeFile(t, path, "project:\n  id: p\nservices:\n"+
+		"  - id: s\n    mode: watch\n    check: { type: tcp, port: 1 }\n"+
+		"    stop: { command: server }\n")
+	_, err = config.LoadFile(path)
+	neq(t, "watch+stop is rejected", err, nil)
+}
+
+func TestLoadFile_parsesGroupOnProcessService(t *testing.T) {
+	// Group deduplication is mode-agnostic — test with process mode.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ev.einhasad-bar.yaml")
 	writeFile(t, path, "project:\n  id: ev\nservices:\n"+
-		"  - id: mysql\n    mode: watch\n    group: lamp\n    check: { type: tcp, port: 3306 }\n"+
-		"    start: { command: server, args: [up], working_dir: /srv/ev }\n"+
-		"    stop:  { command: server, args: [down], working_dir: /srv/ev }\n")
+		"  - id: api\n    mode: process\n    group: servers\n    command: server\n    args: [run]\n    working_dir: /srv/ev\n")
 
-	// Act
 	proj, err := config.LoadFile(path)
 
-	// Assert
 	eq(t, "no error", err, nil)
-	svc := proj.Services[0]
-	eq(t, "group parsed", svc.Group, "lamp")
-	eq(t, "start command parsed", svc.Start.Command, "server")
-	eq(t, "start args parsed", svc.Start.Args, []string{"up"})
-	eq(t, "stop working_dir parsed", svc.Stop.WorkingDir, "/srv/ev")
+	eq(t, "group parsed", proj.Services[0].Group, "servers")
 }
 
 func TestLoadFile_rejectsUnknownMode(t *testing.T) {
@@ -149,14 +157,14 @@ func TestLoadFile_expandsDeclaredVariables(t *testing.T) {
 	// Arrange
 	dir := realDir(t)
 	path := filepath.Join(dir, "aw.einhasad-bar.yaml")
-	writeFile(t, path, "project:\n  id: aw\nvariables:\n  BIN: /usr/local/bin\n  DATA: $PROJECT_DIR/data\nservices:\n  - id: s\n    mode: watch\n    check: { type: pidfile, pidfile: \"$DATA/s.pid\" }\n    start: { command: \"$BIN/mysqld\" }\n")
+	writeFile(t, path, "project:\n  id: aw\nvariables:\n  BIN: /usr/local/bin\n  DATA: $PROJECT_DIR/data\nservices:\n  - id: s\n    mode: process\n    command: \"$BIN/mysqld\"\n    check: { type: pidfile, pidfile: \"$DATA/s.pid\" }\n")
 
 	// Act
 	proj, err := config.LoadFile(path)
 
 	// Assert
 	eq(t, "no error", err, nil)
-	eq(t, "declared var expanded in command", proj.Services[0].Start.Command, "/usr/local/bin/mysqld")
+	eq(t, "declared var expanded in command", proj.Services[0].Command, "/usr/local/bin/mysqld")
 	eq(t, "var referencing PROJECT_DIR expanded in pidfile", proj.Services[0].Check.Pidfile, dir+"/data/s.pid")
 }
 
@@ -165,7 +173,7 @@ func TestLoadFile_mergesLocalSibling(t *testing.T) {
 	dir := t.TempDir()
 	base := filepath.Join(dir, "ev.einhasad-bar.yaml")
 	local := filepath.Join(dir, "ev.einhasad-bar.local.yaml")
-	writeFile(t, base, "project:\n  id: ev\nvariables:\n  BIN: /default/bin\nservices:\n  - id: s\n    mode: watch\n    check: { type: tcp, port: 1 }\n    start: { command: \"$BIN/server\" }\n")
+	writeFile(t, base, "project:\n  id: ev\nvariables:\n  BIN: /default/bin\nservices:\n  - id: s\n    mode: process\n    command: \"$BIN/server\"\n")
 	writeFile(t, local, "variables:\n  BIN: /local/bin\n")
 
 	// Act
@@ -173,7 +181,7 @@ func TestLoadFile_mergesLocalSibling(t *testing.T) {
 
 	// Assert
 	eq(t, "no error", err, nil)
-	eq(t, "local var override wins", proj.Services[0].Start.Command, "/local/bin/server")
+	eq(t, "local var override wins", proj.Services[0].Command, "/local/bin/server")
 }
 
 func TestLoadFile_localAlwaysWinsOverNonLocal(t *testing.T) {
@@ -182,7 +190,7 @@ func TestLoadFile_localAlwaysWinsOverNonLocal(t *testing.T) {
 	base := filepath.Join(dir, "p.einhasad-bar.yaml")
 	nonLocal := filepath.Join(dir, "p.einhasad-bar.z.yaml")
 	local := filepath.Join(dir, "p.einhasad-bar.local.yaml")
-	writeFile(t, base, "project:\n  id: p\nvariables:\n  BIN: /base\nservices:\n  - id: s\n    mode: watch\n    check: { type: tcp, port: 1 }\n    start: { command: \"$BIN/s\" }\n")
+	writeFile(t, base, "project:\n  id: p\nvariables:\n  BIN: /base\nservices:\n  - id: s\n    mode: process\n    command: \"$BIN/s\"\n")
 	writeFile(t, nonLocal, "variables:\n  BIN: /nonlocal\n")
 	writeFile(t, local, "variables:\n  BIN: /local\n")
 
@@ -191,7 +199,7 @@ func TestLoadFile_localAlwaysWinsOverNonLocal(t *testing.T) {
 
 	// Assert
 	eq(t, "no error", err, nil)
-	eq(t, "local.yaml wins over non-local regardless of sort order", proj.Services[0].Start.Command, "/local/s")
+	eq(t, "local.yaml wins over non-local regardless of sort order", proj.Services[0].Command, "/local/s")
 }
 
 func TestLoadFile_mergesServicesByID(t *testing.T) {

@@ -487,6 +487,12 @@ func normalizeService(s *Service) error {
 		if s.Check == nil {
 			return fmt.Errorf("service %q: watch mode requires a check", s.ID)
 		}
+		if s.Start != nil {
+			return fmt.Errorf("service %q: watch mode cannot have a start command (use process mode to manage the lifecycle)", s.ID)
+		}
+		if s.Stop != nil {
+			return fmt.Errorf("service %q: watch mode cannot have a stop command (use process mode to manage the lifecycle)", s.ID)
+		}
 	default:
 		return fmt.Errorf("service %q: unknown mode %q", s.ID, s.Mode)
 	}
