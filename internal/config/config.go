@@ -83,10 +83,20 @@ type Service struct {
 // Defaults to true when unspecified.
 func (s Service) IsRequired() bool { return s.Required == nil || *s.Required }
 
+// Action is a project-level command shown as a tray right-click menu item.
+type Action struct {
+	Label      string            `yaml:"label"`
+	Command    string            `yaml:"command"`
+	Args       []string          `yaml:"args"`
+	WorkingDir string            `yaml:"working_dir"`
+	Env        map[string]string `yaml:"env"`
+}
+
 // Project is one loaded *.einhasad-bar.yaml file.
 type Project struct {
 	Name       string
 	ID         string
+	Actions    []Action
 	Services   []Service
 	SourceFile string
 }
@@ -98,6 +108,7 @@ type rawConfig struct {
 	} `yaml:"project"`
 	Include   []string          `yaml:"include"`
 	Variables map[string]string `yaml:"variables"`
+	Actions   []Action          `yaml:"actions"`
 	Services  []Service         `yaml:"services"`
 }
 
@@ -162,6 +173,7 @@ func LoadFiles(filePaths []string) (Project, error) {
 				merged.Name = p.Name
 			}
 			merged.Services = mergeProjectServices(merged.Services, p.Services)
+			merged.Actions = append(merged.Actions, p.Actions...)
 		}
 	}
 	if merged.ID == "" {
@@ -236,10 +248,14 @@ func loadFile(path string, requireID bool) (Project, error) {
 	for i := range merged.Services {
 		expandService(&merged.Services[i], expand)
 	}
+	for i := range merged.Actions {
+		expandAction(&merged.Actions[i], expand)
+	}
 
 	proj := Project{
 		Name:       merged.Project.Name,
 		ID:         merged.Project.ID,
+		Actions:    merged.Actions,
 		Services:   merged.Services,
 		SourceFile: realPath,
 	}
@@ -265,6 +281,7 @@ func loadFile(path string, requireID bool) (Project, error) {
 			return Project{}, fmt.Errorf("include %q: project.id %q does not match %q", inclRaw, included.ID, proj.ID)
 		}
 		proj.Services = mergeProjectServices(proj.Services, included.Services)
+		proj.Actions = append(proj.Actions, included.Actions...)
 	}
 
 	for i := range proj.Services {
@@ -299,6 +316,10 @@ func mergeRaw(dst, src rawConfig) rawConfig {
 
 	if len(src.Include) > 0 {
 		dst.Include = append(dst.Include, src.Include...)
+	}
+
+	if len(src.Actions) > 0 {
+		dst.Actions = append(dst.Actions, src.Actions...)
 	}
 
 	if len(src.Variables) > 0 {
@@ -452,6 +473,17 @@ func expandCommand(c *Command, expand func(string) string) {
 	c.EnvFile = expand(c.EnvFile)
 	for k, v := range c.Env {
 		c.Env[k] = expand(v)
+	}
+}
+
+func expandAction(a *Action, expand func(string) string) {
+	a.Command = expand(a.Command)
+	for i, arg := range a.Args {
+		a.Args[i] = expand(arg)
+	}
+	a.WorkingDir = expand(a.WorkingDir)
+	for k, v := range a.Env {
+		a.Env[k] = expand(v)
 	}
 }
 

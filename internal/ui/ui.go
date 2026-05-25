@@ -100,10 +100,15 @@ func (c *Controller) addProject(proj config.Project) {
 	tray.SetIcon(c.icons.Idle)
 	tray.AttachWindow(window).WindowOffset(8)
 
-	// Right-click menu as a safety net / quick actions.
+	// Right-click menu: project-level actions from YAML, then Refresh / Quit.
 	menu := c.app.NewMenu()
-	menu.Add("Start server").OnClick(func(*application.Context) { go c.dispatch(proj.ID, "", "startall") })
-	menu.Add("Stop server").OnClick(func(*application.Context) { go c.dispatch(proj.ID, "", "stopall") })
+	for _, action := range proj.Actions {
+		action := action
+		menu.Add(action.Label).OnClick(func(*application.Context) { go c.runAction(action) })
+	}
+	if len(proj.Actions) > 0 {
+		menu.AddSeparator()
+	}
 	menu.Add("Refresh").OnClick(func(*application.Context) { c.Refresh() })
 	menu.AddSeparator()
 	menu.Add("Quit").OnClick(func(*application.Context) { go c.quitProject(proj.ID) })
@@ -204,12 +209,6 @@ func (c *Controller) dispatch(projectID, serviceID, op string) {
 	defer unlock()
 
 	switch op {
-	case "startall":
-		// "Start server" brings up required services only.
-		c.forEachServer(projectID, true, true)
-	case "stopall":
-		// "Stop server" tears down everything, optional included.
-		c.forEachServer(projectID, false, false)
 	case "start":
 		if svc, ok := c.service(projectID, serviceID); ok {
 			c.startService(projectID, svc)
@@ -239,27 +238,29 @@ func (c *Controller) lockProject(projectID string) func() {
 	return m.Unlock
 }
 
-// startService/stopService route one service to the right backend: process
-// services are supervised (pidfile), watch services run their Start/Stop command
-// detached/to-completion with health left as the source of truth.
 func (c *Controller) startService(projectID string, svc config.Service) {
-	if svc.Mode == config.ModeWatch {
-		if svc.Start != nil {
-			_ = c.sup.RunLifecycle(projectID, svc, svc.Start, true)
-		}
-		return
+	if svc.Mode == config.ModeProcess {
+		_ = c.sup.Start(projectID, svc)
 	}
-	_ = c.sup.Start(projectID, svc)
 }
 
 func (c *Controller) stopService(projectID string, svc config.Service) {
-	if svc.Mode == config.ModeWatch {
-		if svc.Stop != nil {
-			_ = c.sup.RunLifecycle(projectID, svc, svc.Stop, false)
-		}
-		return
+	if svc.Mode == config.ModeProcess {
+		_ = c.sup.Stop(projectID, svc)
 	}
-	_ = c.sup.Stop(projectID, svc)
+}
+
+// runAction runs a project-level action command to completion and refreshes.
+func (c *Controller) runAction(action config.Action) {
+	cmd := exec.Command(action.Command, action.Args...)
+	if action.WorkingDir != "" {
+		cmd.Dir = action.WorkingDir
+	}
+	for k, v := range action.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	_ = cmd.Run()
+	c.Refresh()
 }
 
 // quitProject stops all process-mode services for one project, removes its tray
