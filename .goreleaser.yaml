@@ -2,8 +2,10 @@
 # Local check:   goreleaser build --single-target --snapshot --clean
 # Release (CI):  triggered by pushing a v* tag (see .github/workflows/release.yml)
 #
-# MVP ships darwin/arm64 only — the app is a CGO Wails binary, and a single
-# native arm64 build avoids cross-compiling CGO. amd64 is a follow-up.
+# GoReleaser handles darwin/arm64 + the Homebrew tap. The app is a CGO Wails
+# binary that can't be cross-compiled, so the linux/amd64 tarball is built
+# natively in a separate job (see .github/workflows/release.yml) and attached to
+# the release this run creates. darwin/amd64 is a follow-up.
 version: 2
 
 project_name: einhasad-bar
@@ -47,9 +49,8 @@ brews:
     install: |
       bin.install "einhasad-bar"
     caveats: |
-      einhasad-bar is a menu-bar app. Register a project config, then launch it:
-        einhasad-bar register /path/to/einhasad-bar.yaml
-        einhasad-bar &
+      einhasad-bar is a menu-bar app. From a project with an einhasad-bar.yaml:
+        einhasad-bar up -d
       To start it at login, add it under
         System Settings → General → Login Items.
 

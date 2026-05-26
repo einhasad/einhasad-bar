@@ -29,3 +29,36 @@ jobs:
           # PAT (Contents:write on einhasad/homebrew-tap) so the brew formula
           # can be pushed to the separate tap repo.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  # The Wails binary is CGO, so a Linux build can't be cross-compiled from the
+  # macOS GoReleaser runner — it's built natively here and the tarball is
+  # attached to the release GoReleaser created. Built on 22.04 (older glibc +
+  # webkit2gtk-4.1) so it also runs on newer Debian/Ubuntu. Other distros/arches
+  # build from source (see README → Linux build).
+  linux:
+    needs: goreleaser
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Install GTK/WebKit build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Build, package, and upload linux/amd64 tarball
+        env:
+          CGO_ENABLED: "1"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"            # v1.2.3 -> 1.2.3 (matches GoReleaser .Version)
+          name="einhasad-bar_${version}_linux_amd64" # matches GoReleaser archive name_template
+          go build -trimpath -tags gtk3 -ldflags "-s -w -X main.version=${version}" -o einhasad-bar .
+          tar -czf "${name}.tar.gz" einhasad-bar LICENSE README.md
+          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          gh release upload "${GITHUB_REF_NAME}" "${name}.tar.gz" "${name}.tar.gz.sha256" --clobber

@@ -24,15 +24,16 @@ const (
 
 // ServiceView is one service's state on the wire.
 type ServiceView struct {
-	ID        string `json:"id"`
-	Label     string `json:"label"`
-	Mode      string `json:"mode"`
-	State     string `json:"state"`     // up | starting | down
-	Info      string `json:"info"`      // stats line or status text
-	URL       string `json:"url"`       // empty if none
-	Required  bool   `json:"required"`  // gates the icon colour
-	Running   bool   `json:"running"`   // managed process alive (drives Start/Stop)
-	CanToggle bool   `json:"canToggle"` // process mode → show Start/Stop
+	ID            string `json:"id"`
+	Label         string `json:"label"`
+	Mode          string `json:"mode"`
+	State         string `json:"state"`         // up | starting | down
+	Info          string `json:"info"`          // stats line or status text
+	URL           string `json:"url"`           // empty if none
+	Required      bool   `json:"required"`      // gates the icon colour
+	Running       bool   `json:"running"`       // managed process alive (drives Start/Stop)
+	CanToggle     bool   `json:"canToggle"`     // process mode → show Start/Stop
+	ActionRunning string `json:"actionRunning"` // "starting" | "stopping" | ""
 }
 
 // ActionView is one project-level action as sent to the frontend.
@@ -42,13 +43,14 @@ type ActionView struct {
 
 // ProjectView is one project's state on the wire.
 type ProjectView struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	Actions     []ActionView  `json:"actions"`
-	Services    []ServiceView `json:"services"`
-	ReqUp       int           `json:"reqUp"`
-	ReqTotal    int           `json:"reqTotal"`
-	ReqStarting int           `json:"reqStarting"`
+	ID            string        `json:"id"`
+	Name          string        `json:"name"`
+	Actions       []ActionView  `json:"actions"`
+	Services      []ServiceView `json:"services"`
+	ReqUp         int           `json:"reqUp"`
+	ReqTotal      int           `json:"reqTotal"`
+	ReqStarting   int           `json:"reqStarting"`
+	ActionRunning string        `json:"actionRunning"` // label of the running action, or ""
 }
 
 // Snapshot is the full payload emitted to every popover.

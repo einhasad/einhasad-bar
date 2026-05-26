@@ -31,17 +31,8 @@ import (
 //go:embed all:frontend
 var frontendFS embed.FS
 
-//go:embed assets/icons/idle.pdf
-var iconIdle []byte
-
-//go:embed assets/icons/busy.pdf
-var iconBusy []byte
-
-//go:embed assets/icons/mixed.pdf
-var iconMixed []byte
-
-//go:embed assets/icons/starting.pdf
-var iconStarting []byte
+// Tray icon bytes (iconIdle/iconBusy/iconMixed/iconStarting) are embedded per
+// OS in icons_darwin.go (PDF) and icons_linux.go (PNG).
 
 // pollInterval is how often health is re-checked and pushed to the popovers.
 const pollInterval = 2 * time.Second
@@ -71,16 +62,22 @@ func main() {
 	os.Exit(1)
 }
 
-// augmentPATH prepends common Homebrew locations to PATH so a menu-bar app
-// launched at login (with the minimal /usr/bin:/bin PATH) can still find
-// brew-installed tools — mysqld, redis, node/npm, dotenvx, go. This is the
-// one piece of environment every SwiftBar plugin had to set by hand.
+// augmentPATH prepends common tool locations to PATH so a menu-bar app launched
+// at login (with a minimal PATH) can still find the binaries it manages —
+// mysqld, redis, node/npm, dotenvx, go. macOS Homebrew and Linux system/Go dirs
+// are both listed; os.Stat skips any that don't exist, so the list is shared.
+// This is the one piece of environment every SwiftBar plugin had to set by hand.
 func augmentPATH() {
 	candidates := []string{
+		// macOS (Homebrew)
 		"/opt/homebrew/bin",
 		"/opt/homebrew/sbin",
 		"/opt/homebrew/opt/node@22/bin",
 		"/usr/local/bin",
+		// Linux
+		"/usr/local/go/bin",
+		"/snap/bin",
+		"/usr/sbin",
 	}
 	cur := os.Getenv("PATH")
 	var add []string

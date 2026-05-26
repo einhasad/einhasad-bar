@@ -73,13 +73,21 @@
     footer.innerHTML = "";
     for (const a of (pv.actions || [])) {
       const b = document.createElement("button");
-      b.textContent = a.label;
+      const isRunning = pv.actionRunning === a.label;
+      b.textContent = isRunning ? a.label + "…" : a.label;
+      b.disabled = !!pv.actionRunning;
+      if (isRunning) b.className = "primary";
       b.onclick = () => action("action", a.label);
       footer.appendChild(b);
     }
 
-    let summary = `${pv.reqUp}/${pv.reqTotal} running`;
-    if (pv.reqStarting > 0) summary += ` · ${pv.reqStarting} starting`;
+    let summary;
+    if (pv.actionRunning) {
+      summary = pv.actionRunning + "…";
+    } else {
+      summary = `${pv.reqUp}/${pv.reqTotal} running`;
+      if (pv.reqStarting > 0) summary += ` · ${pv.reqStarting} starting`;
+    }
     document.getElementById("proj-summary").textContent = summary;
 
     const ul = document.getElementById("services");
@@ -89,22 +97,25 @@
 
       const row = document.createElement("div");
       row.className = "row";
+      const dotState = s.actionRunning ? "starting" : s.state;
       row.innerHTML =
-        `<span class="dot ${s.state}"></span>` +
+        `<span class="dot ${dotState}"></span>` +
         `<span class="label">${s.label}${s.required ? "" : ' <span class="opt">(opt)</span>'}</span>`;
       li.appendChild(row);
 
       const info = document.createElement("div");
       info.className = "info";
-      info.textContent = s.info;
+      info.textContent = s.actionRunning ? s.actionRunning + "…" : s.info;
       li.appendChild(info);
 
       const actions = document.createElement("div");
       actions.className = "actions";
       if (s.canToggle) {
         const b = document.createElement("button");
-        b.textContent = s.running ? "Stop" : "Start";
-        b.className = s.running ? "danger" : "primary";
+        const isRunning = !!s.actionRunning;
+        b.textContent = s.actionRunning ? s.actionRunning + "…" : (s.running ? "Stop" : "Start");
+        b.className = s.running && !s.actionRunning ? "danger" : "primary";
+        b.disabled = isRunning;
         b.onclick = () => action(s.running ? "stop" : "start", s.id);
         actions.appendChild(b);
       }

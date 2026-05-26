@@ -48,14 +48,11 @@ func TestBuild_watchStates(t *testing.T) {
 	eqInt(t, "required up count", snap.Projects[0].ReqUp, 1)
 }
 
-func TestBuild_watchToggleableOnlyWithLifecycle(t *testing.T) {
-	// Arrange — two watch services on a live port: one with a stop command
-	// (toggleable), one monitor-only (not toggleable).
+func TestBuild_watchIsMonitorOnly(t *testing.T) {
+	// Arrange — a live watch service. Watch services are monitor-only: their
+	// state mirrors the health check and they never expose Start/Stop controls.
 	live := openPort(t)
 	proj := config.Project{ID: "twatch2", Name: "Watch", Services: []config.Service{
-		{ID: "ctl", Label: "Controllable", Mode: config.ModeWatch,
-			Check: &config.Check{Type: config.CheckTCP, Port: live},
-			Stop:  &config.Command{Command: "true"}},
 		{ID: "mon", Label: "MonitorOnly", Mode: config.ModeWatch,
 			Check: &config.Check{Type: config.CheckTCP, Port: live}},
 	}}
@@ -63,12 +60,11 @@ func TestBuild_watchToggleableOnlyWithLifecycle(t *testing.T) {
 	// Act
 	snap := state.Build([]config.Project{proj}, supervisor.New())
 
-	// Assert — both report up (health), but only the one with a command toggles.
-	svcs := snap.Projects[0].Services
-	eqStr(t, "controllable watch is up", svcs[0].State, state.StateUp)
-	eqBool(t, "controllable watch toggles", svcs[0].CanToggle, true)
-	eqBool(t, "controllable watch running mirrors check", svcs[0].Running, true)
-	eqBool(t, "monitor-only watch does not toggle", svcs[1].CanToggle, false)
+	// Assert — up via health, running mirrors the check, but never toggleable.
+	svc := snap.Projects[0].Services[0]
+	eqStr(t, "watch is up", svc.State, state.StateUp)
+	eqBool(t, "watch running mirrors check", svc.Running, true)
+	eqBool(t, "watch does not toggle", svc.CanToggle, false)
 }
 
 func TestBuild_processStartingThenDown(t *testing.T) {

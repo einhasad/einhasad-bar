@@ -1,8 +1,8 @@
-// Package paths centralises einhasad-bar's per-project state and log locations,
-// mirroring the SwiftBar setup it replaces:
+// Package paths centralises einhasad-bar's per-project state and log locations.
+// The roots are OS-specific (see paths_darwin.go / paths_linux.go):
 //
-//	state/pidfiles → ~/Library/Caches/einhasad-bar/<project>/
-//	logs           → ~/Library/Logs/einhasad-bar/<project>/
+//	macOS: state → ~/Library/Caches/einhasad-bar/<project>/, logs → ~/Library/Logs/einhasad-bar/<project>/
+//	Linux: state → ~/.cache/einhasad-bar/<project>/,         logs → ~/.local/state/einhasad-bar/logs/<project>/
 package paths
 
 import (
@@ -11,16 +11,6 @@ import (
 )
 
 const appName = "einhasad-bar"
-
-func cacheRoot() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "Caches", appName)
-}
-
-func logRoot() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "Logs", appName)
-}
 
 // ConfigDir returns (and creates) the directory holding registered project
 // configs. Each registration is a symlink named "<id>.einhasad-bar.yaml" so the

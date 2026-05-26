@@ -38,15 +38,17 @@ type Icons struct {
 
 // Controller owns the trays/windows and drives state emission.
 type Controller struct {
-	app      *application.App
-	sup      *supervisor.Supervisor
-	icons    Icons
-	mu       sync.RWMutex
-	projects []config.Project
-	trays    map[string]*application.SystemTray
-	windows  map[string]*application.WebviewWindow
-	lastIcon map[string]string
-	locks    sync.Map // projectID → *sync.Mutex, serialises actions per project
+	app            *application.App
+	sup            *supervisor.Supervisor
+	icons          Icons
+	mu             sync.RWMutex
+	projects       []config.Project
+	trays          map[string]*application.SystemTray
+	windows        map[string]*application.WebviewWindow
+	lastIcon       map[string]string
+	locks          sync.Map // projectID → *sync.Mutex, serialises actions per project
+	actionsRunning  sync.Map // projectID → action label (string)
+	servicesRunning sync.Map // "projectID/serviceID" → "starting"|"stopping"
 }
 
 // New builds a controller, creates one tray + popover per project, and wires the
@@ -91,7 +93,11 @@ func (c *Controller) addProject(proj config.Project) {
 		focused.Store(false)
 		time.AfterFunc(250*time.Millisecond, func() {
 			if !focused.Load() {
-				window.Hide()
+				// Keep the popover open while a project action is running so the
+				// user can see the live state updates.
+				if _, running := c.actionsRunning.Load(proj.ID); !running {
+					window.Hide()
+				}
 			}
 		})
 	})
@@ -104,7 +110,7 @@ func (c *Controller) addProject(proj config.Project) {
 	menu := c.app.NewMenu()
 	for _, action := range proj.Actions {
 		action := action
-		menu.Add(action.Label).OnClick(func(*application.Context) { go c.runAction(action) })
+		menu.Add(action.Label).OnClick(func(*application.Context) { go c.runAction(proj.ID, action) })
 	}
 	if len(proj.Actions) > 0 {
 		menu.AddSeparator()
@@ -127,6 +133,22 @@ func (c *Controller) Refresh() {
 
 	snap := state.Build(projects, c.sup)
 
+	// Annotate projects and services where an action is currently running.
+	for i := range snap.Projects {
+		pid := snap.Projects[i].ID
+		var projAction string
+		if v, ok := c.actionsRunning.Load(pid); ok {
+			projAction = v.(string)
+			snap.Projects[i].ActionRunning = projAction
+		}
+		for j := range snap.Projects[i].Services {
+			key := pid + "/" + snap.Projects[i].Services[j].ID
+			if v, ok := c.servicesRunning.Load(key); ok {
+				snap.Projects[i].Services[j].ActionRunning = v.(string)
+			}
+		}
+	}
+
 	if data, err := json.Marshal(snap); err == nil {
 		c.app.Event.Emit("eb:state", string(data))
 	}
@@ -140,7 +162,14 @@ func (c *Controller) Refresh() {
 		if tray == nil {
 			continue
 		}
-		name, icon := c.iconFor(pv)
+		var name string
+		var icon []byte
+		if pv.ActionRunning != "" {
+			name = "action:" + pv.ActionRunning
+			icon = c.icons.Starting
+		} else {
+			name, icon = c.iconFor(pv)
+		}
 		if lastName != name {
 			c.mu.Lock()
 			c.lastIcon[pv.ID] = name
@@ -148,7 +177,9 @@ func (c *Controller) Refresh() {
 			tray.SetIcon(icon)
 		}
 		var label string
-		if pv.ReqTotal > 0 && pv.ReqUp < pv.ReqTotal {
+		if pv.ActionRunning != "" {
+			label = strings.ToUpper(pv.ID) + "…"
+		} else if pv.ReqTotal > 0 && pv.ReqUp < pv.ReqTotal {
 			label = fmt.Sprintf("%s %d/%d", strings.ToUpper(pv.ID), pv.ReqUp, pv.ReqTotal)
 			if pv.ReqStarting > 0 {
 				label += "…"
@@ -188,6 +219,13 @@ func (c *Controller) onAction(e *application.CustomEvent) {
 	if err := json.Unmarshal([]byte(raw), &a); err != nil {
 		return
 	}
+	// Mark the action as running synchronously — before the goroutine starts —
+	// so the 250ms window-hide guard in addProject sees it immediately and keeps
+	// the popover open while the action runs.
+	if a.Op == "action" && a.Project != "" && a.Service != "" {
+		c.actionsRunning.Store(a.Project, a.Service)
+		c.Refresh()
+	}
 	go c.dispatch(a.Project, a.Service, a.Op)
 }
 
@@ -206,6 +244,19 @@ func (c *Controller) dispatch(projectID, serviceID, op string) {
 		return
 	}
 
+	// Show immediate in-progress feedback for start/stop before acquiring the
+	// project lock (which may block up to 8s waiting for a process to die).
+	if op == "start" || op == "stop" {
+		svcKey := projectID + "/" + serviceID
+		label := "starting"
+		if op == "stop" {
+			label = "stopping"
+		}
+		c.servicesRunning.Store(svcKey, label)
+		c.Refresh()
+		defer c.servicesRunning.Delete(svcKey)
+	}
+
 	// Serialise mutating actions per project so a fast Stop→Start (or two
 	// popovers) can't race the pidfile.
 	unlock := c.lockProject(projectID)
@@ -222,11 +273,11 @@ func (c *Controller) dispatch(projectID, serviceID, op string) {
 		}
 	case "openurl":
 		if svc, ok := c.service(projectID, serviceID); ok && svc.URL != "" {
-			_ = exec.Command("open", svc.URL).Start()
+			openURL(svc.URL)
 		}
 	case "taillog":
 		if logPath, err := paths.LogFile(projectID, serviceID); err == nil {
-			_ = exec.Command("open", "-a", "Console", logPath).Start()
+			openLog(logPath)
 		}
 	}
 	c.Refresh()
@@ -263,7 +314,7 @@ func (c *Controller) dispatchAction(projectID, label string) {
 		}
 		for _, a := range proj.Actions {
 			if a.Label == label {
-				c.runAction(a)
+				c.runAction(projectID, a)
 				return
 			}
 		}
@@ -271,7 +322,27 @@ func (c *Controller) dispatchAction(projectID, label string) {
 }
 
 // runAction runs a project-level action command to completion and refreshes.
-func (c *Controller) runAction(action config.Action) {
+// It sets actionsRunning for the project so the tray icon and popover show a
+// live "in progress" state immediately, rather than waiting for the command to
+// finish (which can take 10+ seconds for server up/down).
+func (c *Controller) runAction(projectID string, action config.Action) {
+	c.actionsRunning.Store(projectID, action.Label)
+
+	// Force tray icon to Starting immediately, bypassing the lastIcon guard.
+	c.mu.RLock()
+	tray := c.trays[projectID]
+	c.mu.RUnlock()
+	if tray != nil {
+		iconName := "action:" + action.Label
+		c.mu.Lock()
+		c.lastIcon[projectID] = iconName
+		c.mu.Unlock()
+		tray.SetIcon(c.icons.Starting)
+		tray.SetLabel(strings.ToUpper(projectID) + "…")
+	}
+
+	c.Refresh()
+
 	cmd := exec.Command(action.Command, action.Args...)
 	if action.WorkingDir != "" {
 		cmd.Dir = action.WorkingDir
@@ -280,6 +351,8 @@ func (c *Controller) runAction(action config.Action) {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	_ = cmd.Run()
+
+	c.actionsRunning.Delete(projectID)
 	c.Refresh()
 }
 
