@@ -9,6 +9,7 @@ import (
 	"embed"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -58,7 +59,7 @@ func main() {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "usage: einhasad-bar <up [-d] [files...]|down [--id=ID]|restart [-d] [files...]|status [files...]|version>\n")
+	fmt.Fprintf(os.Stderr, "usage: einhasad-bar <up [-d] [files...]|down [--id=ID]|restart [-d] [files...]|status [files...]|logs [-f] [--tail=N] <service> [files...]|version>\n")
 	os.Exit(1)
 }
 
@@ -101,6 +102,8 @@ func runCommand(cmd string, args []string) error {
 		return runRestart(args)
 	case "status":
 		return runStatus(args)
+	case "logs":
+		return runLogs(args)
 	case "version":
 		fmt.Printf("einhasad-bar %s\n", version)
 		return nil
@@ -459,4 +462,147 @@ func readPID(path string) (int, bool) {
 		return 0, false
 	}
 	return pid, true
+}
+
+// runLogs streams the log file for a service, similar to kubectl logs.
+// Usage: einhasad-bar logs [-f] [--tail=N] <service> [files...]
+func runLogs(args []string) error {
+	fset := flag.NewFlagSet("logs", flag.ContinueOnError)
+	follow := fset.Bool("f", false, "stream log output (follow)")
+	tailN := fset.Int("tail", 20, "lines from end to show (-1 = all)")
+	if err := fset.Parse(args); err != nil {
+		return err
+	}
+
+	rest := fset.Args()
+	if len(rest) == 0 {
+		return fmt.Errorf("usage: einhasad-bar logs [-f] [--tail=N] <service> [files...]")
+	}
+	serviceID := rest[0]
+
+	filePaths := rest[1:]
+	if len(filePaths) == 0 {
+		filePaths = []string{"einhasad-bar.yaml"}
+	}
+	for i, p := range filePaths {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return err
+		}
+		filePaths[i] = abs
+	}
+
+	proj, err := config.LoadFiles(filePaths)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	found := false
+	for _, svc := range proj.Services {
+		if svc.ID == serviceID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		var ids []string
+		for _, svc := range proj.Services {
+			ids = append(ids, svc.ID)
+		}
+		return fmt.Errorf("unknown service %q (available: %s)", serviceID, strings.Join(ids, ", "))
+	}
+
+	logPath, err := paths.LogFile(proj.ID, serviceID)
+	if err != nil {
+		return err
+	}
+
+	f, err := os.Open(logPath)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("no log for %q — has it been started?", serviceID)
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if err := tailLines(f, *tailN); err != nil {
+		return err
+	}
+	if !*follow {
+		return nil
+	}
+
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			os.Stdout.Write(buf[:n])
+		}
+		if readErr == io.EOF {
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+}
+
+// tailLines prints the last n lines of f and leaves the read position at EOF.
+// n < 0 prints the whole file; n == 0 prints nothing.
+func tailLines(f *os.File, n int) error {
+	if n == 0 {
+		return nil
+	}
+	if n < 0 {
+		_, err := io.Copy(os.Stdout, f)
+		return err
+	}
+
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	size := info.Size()
+	if size == 0 {
+		return nil
+	}
+
+	const chunkSize = 4096
+	buf := make([]byte, chunkSize)
+	pos := size
+	newlines := 0
+	startPos := int64(0)
+
+outer:
+	for pos > 0 {
+		read := int64(chunkSize)
+		if pos < read {
+			read = pos
+		}
+		pos -= read
+		if _, err := f.Seek(pos, io.SeekStart); err != nil {
+			return err
+		}
+		nr, err := f.Read(buf[:read])
+		if err != nil && err != io.EOF {
+			return err
+		}
+		for i := nr - 1; i >= 0; i-- {
+			if buf[i] == '\n' {
+				newlines++
+				if newlines > n {
+					startPos = pos + int64(i) + 1
+					break outer
+				}
+			}
+		}
+	}
+
+	if _, err := f.Seek(startPos, io.SeekStart); err != nil {
+		return err
+	}
+	_, err = io.Copy(os.Stdout, f)
+	return err
 }

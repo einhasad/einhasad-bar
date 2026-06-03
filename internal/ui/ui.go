@@ -48,6 +48,7 @@ type Controller struct {
 	lastIcon       map[string]string
 	locks          sync.Map // projectID → *sync.Mutex, serialises actions per project
 	actionsRunning  sync.Map // projectID → action label (string)
+	actionsResult   sync.Map // projectID → actionResult, cleared after 3s
 	servicesRunning sync.Map // "projectID/serviceID" → "starting"|"stopping"
 }
 
@@ -140,6 +141,11 @@ func (c *Controller) Refresh() {
 		if v, ok := c.actionsRunning.Load(pid); ok {
 			projAction = v.(string)
 			snap.Projects[i].ActionRunning = projAction
+		}
+		if v, ok := c.actionsResult.Load(pid); ok {
+			r := v.(actionResult)
+			snap.Projects[i].ActionResult = r.label
+			snap.Projects[i].ActionResultOK = r.ok
 		}
 		for j := range snap.Projects[i].Services {
 			key := pid + "/" + snap.Projects[i].Services[j].ID
@@ -321,6 +327,11 @@ func (c *Controller) dispatchAction(projectID, label string) {
 	}
 }
 
+type actionResult struct {
+	label string
+	ok    bool
+}
+
 // runAction runs a project-level action command to completion and refreshes.
 // It sets actionsRunning for the project so the tray icon and popover show a
 // live "in progress" state immediately, rather than waiting for the command to
@@ -350,10 +361,17 @@ func (c *Controller) runAction(projectID string, action config.Action) {
 	for k, v := range action.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	_ = cmd.Run()
+	err := cmd.Run()
 
 	c.actionsRunning.Delete(projectID)
+	c.actionsResult.Store(projectID, actionResult{label: action.Label, ok: err == nil})
 	c.Refresh()
+
+	go func() {
+		time.Sleep(3 * time.Second)
+		c.actionsResult.Delete(projectID)
+		c.Refresh()
+	}()
 }
 
 // quitProject stops all process-mode services for one project, removes its tray
