@@ -202,6 +202,30 @@ func (s *Supervisor) RunLifecycle(projectID string, svc config.Service, c *confi
 	}
 }
 
+// RunForeground runs a process-mode service attached to the current terminal:
+// stdio is inherited, no log file or pidfile is written, and it stays in this
+// process's group so an interactive Ctrl-C reaches the whole child tree
+// (make → air → server) — exactly like running the command by hand. It blocks
+// until the process exits.
+func (s *Supervisor) RunForeground(svc config.Service) error {
+	if svc.Mode != config.ModeProcess {
+		return fmt.Errorf("service %q is not a process", svc.ID)
+	}
+	env, err := buildEnv(svc.WorkingDir, svc.EnvFile, svc.Env)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(svc.Command, svc.Args...)
+	cmd.Dir = svc.WorkingDir
+	cmd.Env = env
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	// Intentionally no Setpgid: share the terminal's foreground process group so
+	// Ctrl-C signals the whole tree, not just the leader.
+	return cmd.Run()
+}
+
 // Alive reports whether a managed service's tracked process is running.
 func (s *Supervisor) Alive(projectID, serviceID string) bool {
 	pidPath, err := paths.PidFile(projectID, serviceID)

@@ -139,6 +139,34 @@ func TestLoadFile_rejectsEmptyLifecycleCommand(t *testing.T) {
 	neq(t, "empty start command is rejected", err, nil)
 }
 
+func TestLoadFile_actionDefaultsLabelFromID(t *testing.T) {
+	// Arrange — an action with an id but no label.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "p.einhasad-bar.yaml")
+	writeFile(t, path, "project:\n  id: p\nactions:\n  - id: start-server\n    command: echo\nservices:\n  - id: x\n    mode: watch\n    check: { type: tcp, port: 1 }\n")
+
+	// Act
+	proj, err := config.LoadFile(path)
+
+	// Assert
+	eq(t, "no error", err, nil)
+	eq(t, "action id parsed", proj.Actions[0].ID, "start-server")
+	eq(t, "label defaults to id", proj.Actions[0].Label, "start-server")
+}
+
+func TestLoadFile_rejectsDuplicateActionID(t *testing.T) {
+	// Arrange — two actions sharing one id would make `run <id>` ambiguous.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.einhasad-bar.yaml")
+	writeFile(t, path, "project:\n  id: bad\nactions:\n  - { id: a, command: echo }\n  - { id: a, command: echo }\nservices:\n  - id: x\n    mode: watch\n    check: { type: tcp, port: 1 }\n")
+
+	// Act
+	_, err := config.LoadFile(path)
+
+	// Assert
+	neq(t, "duplicate action id is rejected", err, nil)
+}
+
 func TestLoadFile_expandsProjectDir(t *testing.T) {
 	// Arrange
 	dir := realDir(t)

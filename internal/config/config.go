@@ -8,6 +8,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -84,12 +85,29 @@ type Service struct {
 func (s Service) IsRequired() bool { return s.Required == nil || *s.Required }
 
 // Action is a project-level command shown as a tray right-click menu item.
+// ID is an optional stable handle used to invoke the action from the CLI
+// (`einhasad-bar run <id>`); Label is the human-facing menu text.
 type Action struct {
+	ID         string            `yaml:"id"`
 	Label      string            `yaml:"label"`
 	Command    string            `yaml:"command"`
 	Args       []string          `yaml:"args"`
 	WorkingDir string            `yaml:"working_dir"`
 	Env        map[string]string `yaml:"env"`
+}
+
+// Cmd builds the *exec.Cmd for the action, seeded with the inherited
+// environment (so PATH and friends survive) plus the action's own env. Callers
+// attach stdio / decide how to run it. Shared by the tray menu and the CLI
+// `run` command so both spawn the action identically.
+func (a Action) Cmd() *exec.Cmd {
+	cmd := exec.Command(a.Command, a.Args...)
+	cmd.Dir = a.WorkingDir
+	cmd.Env = os.Environ()
+	for k, v := range a.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	return cmd
 }
 
 // Project is one loaded *.einhasad-bar.yaml file.
@@ -289,7 +307,30 @@ func loadFile(path string, requireID bool) (Project, error) {
 			return Project{}, err
 		}
 	}
+	if err := normalizeActions(proj.Actions); err != nil {
+		return Project{}, err
+	}
 	return proj, nil
+}
+
+// normalizeActions fills defaults (label ← id) and rejects duplicate action
+// ids, which would make `einhasad-bar run <id>` ambiguous.
+func normalizeActions(actions []Action) error {
+	seen := make(map[string]bool, len(actions))
+	for i := range actions {
+		a := &actions[i]
+		if a.Label == "" {
+			a.Label = a.ID
+		}
+		if a.ID == "" {
+			continue
+		}
+		if seen[a.ID] {
+			return fmt.Errorf("duplicate action id %q", a.ID)
+		}
+		seen[a.ID] = true
+	}
+	return nil
 }
 
 func parseRaw(path string) (rawConfig, error) {

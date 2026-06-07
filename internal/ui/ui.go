@@ -13,7 +13,6 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -354,14 +353,7 @@ func (c *Controller) runAction(projectID string, action config.Action) {
 
 	c.Refresh()
 
-	cmd := exec.Command(action.Command, action.Args...)
-	if action.WorkingDir != "" {
-		cmd.Dir = action.WorkingDir
-	}
-	for k, v := range action.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
-	err := cmd.Run()
+	err := action.Cmd().Run()
 
 	c.actionsRunning.Delete(projectID)
 	c.actionsResult.Store(projectID, actionResult{label: action.Label, ok: err == nil})

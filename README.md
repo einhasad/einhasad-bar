@@ -95,11 +95,20 @@ einhasad-bar <command> [flags] [files...]
 
 | Command | Effect |
 |---|---|
-| `up [-d] [files...]` | Run the menu-bar app for the given config(s). `-d` detaches into the background; otherwise it runs in the foreground. |
-| `down [--id=ID]` | Stop the running app for a project. With no `--id`, reads the id from `einhasad-bar.yaml` in the current directory. |
+| `up [-d] [files...]` | Run the menu-bar app for the given config(s) **and start the required process services**. `-d` detaches into the background; otherwise it runs in the foreground. |
+| `down [--id=ID] [files...]` | Stop the project's process services, then stop the running app. With no `--id`, reads the project from `einhasad-bar.yaml` in the current directory; `--id` is a tray-only shortcut that skips service teardown. |
+| `start [-f file] [--foreground] [service...]` | Start process services headlessly (no GUI, no lock). No names ⇒ the **required** process services; name services to include optional ones. `--foreground <service>` runs one named service attached to the terminal (live output, Ctrl-C stops it, no pidfile) — the supervised analog of running its command by hand. |
+| `stop [-f file] [service...]` | Stop process services headlessly. No names ⇒ **all** process services (incl. optional). |
 | `restart [-d] [files...]` | Stop the running project (waits up to 5s) then start it again. |
 | `status [files...]` | Print a one-shot health table for every service, without launching the GUI. |
+| `logs [-f] [--tail=N] <service> [files...]` | Print (and optionally follow) a service's log. |
+| `run <action> [files...]` | Run a project-level action to completion. |
 | `version` | Print the version. |
+
+**docker-compose mapping.** `up`≈`up`, `down`≈`down`, `start`≈`start`,
+`stop`≈`stop`, `status`≈`ps`, `logs`≈`logs`. Lifecycle commands act on
+**process**-mode services only; **watch** services (externally-managed daemons)
+are skipped — start/stop those however you do today.
 
 Files default to `einhasad-bar.yaml` in the current directory. Passing **several
 files merges them into one project** — they must all agree on `project.id`, and
