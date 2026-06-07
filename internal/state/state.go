@@ -43,16 +43,16 @@ type ActionView struct {
 
 // ProjectView is one project's state on the wire.
 type ProjectView struct {
-	ID              string        `json:"id"`
-	Name            string        `json:"name"`
-	Actions         []ActionView  `json:"actions"`
-	Services        []ServiceView `json:"services"`
-	ReqUp           int           `json:"reqUp"`
-	ReqTotal        int           `json:"reqTotal"`
-	ReqStarting     int           `json:"reqStarting"`
-	ActionRunning   string        `json:"actionRunning"`   // label of the running action, or ""
-	ActionResult    string        `json:"actionResult"`    // label of the last completed action, or ""
-	ActionResultOK  bool          `json:"actionResultOk"`  // true=exit 0, false=error
+	ID             string        `json:"id"`
+	Name           string        `json:"name"`
+	Actions        []ActionView  `json:"actions"`
+	Services       []ServiceView `json:"services"`
+	ReqUp          int           `json:"reqUp"`
+	ReqTotal       int           `json:"reqTotal"`
+	ReqStarting    int           `json:"reqStarting"`
+	ActionRunning  string        `json:"actionRunning"`  // label of the running action, or ""
+	ActionResult   string        `json:"actionResult"`   // label of the last completed action, or ""
+	ActionResultOK bool          `json:"actionResultOk"` // true=exit 0, false=error
 }
 
 // Snapshot is the full payload emitted to every popover.

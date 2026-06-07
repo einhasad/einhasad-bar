@@ -37,15 +37,15 @@ type Icons struct {
 
 // Controller owns the trays/windows and drives state emission.
 type Controller struct {
-	app            *application.App
-	sup            *supervisor.Supervisor
-	icons          Icons
-	mu             sync.RWMutex
-	projects       []config.Project
-	trays          map[string]*application.SystemTray
-	windows        map[string]*application.WebviewWindow
-	lastIcon       map[string]string
-	locks          sync.Map // projectID → *sync.Mutex, serialises actions per project
+	app             *application.App
+	sup             *supervisor.Supervisor
+	icons           Icons
+	mu              sync.RWMutex
+	projects        []config.Project
+	trays           map[string]*application.SystemTray
+	windows         map[string]*application.WebviewWindow
+	lastIcon        map[string]string
+	locks           sync.Map // projectID → *sync.Mutex, serialises actions per project
 	actionsRunning  sync.Map // projectID → action label (string)
 	actionsResult   sync.Map // projectID → actionResult, cleared after 3s
 	servicesRunning sync.Map // "projectID/serviceID" → "starting"|"stopping"
